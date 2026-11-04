@@ -1,0 +1,136 @@
+# Stack de PRODUÇÃO do ZapFire.
+#
+# Diferenças vs docker-compose.yml (dev):
+#   - Inclui o serviço `zapfire` (build da imagem deste repo)
+#   - Inclui Caddy pra reverse proxy + HTTPS automático Let's Encrypt
+#   - Evolution não expõe porta no host (só rede interna)
+#   - Volumes nomeados pra sobreviver restart/recreate
+#
+# Uso:
+#   1) Copie .env.production.example → .env e preencha
+#   2) docker compose -f docker-compose.prod.yml up -d --build
+#
+# Atualizar:
+#   git pull && docker compose -f docker-compose.prod.yml up -d --build
+
+services:
+  evolution-api:
+    image: evoapicloud/evolution-api:v2.3.7
+    container_name: evolution_api
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      - SERVER_TYPE=http
+      - SERVER_PORT=8080
+      - CORS_ORIGIN=*
+      - CORS_METHODS=GET,POST,PUT,DELETE
+      - CORS_CREDENTIALS=true
+      - LOG_LEVEL=ERROR,WARN,INFO
+      - LOG_COLOR=false
+      - LOG_BAILEYS=error
+      - DEL_INSTANCE=false
+      - CONFIG_SESSION_PHONE_CLIENT=ZapFire
+      - CONFIG_SESSION_PHONE_NAME=Chrome
+      - QRCODE_LIMIT=30
+      - QRCODE_COLOR=#000000
+      - AUTHENTICATION_TYPE=apikey
+      - AUTHENTICATION_API_KEY=${EVOLUTION_API_KEY}
+      - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
+      - DATABASE_ENABLED=true
+      - DATABASE_PROVIDER=postgresql
+      - DATABASE_CONNECTION_URI=postgresql://evolution:${POSTGRES_PASSWORD}@postgres:5432/evolution?schema=public
+      - DATABASE_CONNECTION_CLIENT_NAME=evolution_exchange
+      - DATABASE_SAVE_DATA_INSTANCE=true
+      - DATABASE_SAVE_DATA_NEW_MESSAGE=true
+      - DATABASE_SAVE_MESSAGE_UPDATE=true
+      - DATABASE_SAVE_DATA_CONTACTS=true
+      - DATABASE_SAVE_DATA_CHATS=true
+      - DATABASE_SAVE_DATA_LABELS=true
+      - DATABASE_SAVE_DATA_HISTORIC=true
+      - CACHE_REDIS_ENABLED=true
+      - CACHE_REDIS_URI=redis://redis:6379/6
+      - CACHE_REDIS_PREFIX_KEY=evolution
+      - CACHE_REDIS_SAVE_INSTANCES=false
+      - CACHE_LOCAL_ENABLED=false
+    volumes:
+      - evolution_instances:/evolution/instances
+    expose:
+      - "8080"
+    networks:
+      - zapfire_net
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: evolution_postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=evolution
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=evolution
+    volumes:
+      - evolution_postgres:/var/lib/postgresql/data
+    networks:
+      - zapfire_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: evolution_redis
+    restart: unless-stopped
+    volumes:
+      - evolution_redis:/data
+    networks:
+      - zapfire_net
+
+  zapfire:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: zapfire:latest
+    container_name: zapfire_app
+    restart: unless-stopped
+    depends_on:
+      - evolution-api
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=file:/app/data/prod.db
+      - EVOLUTION_API_URL=http://evolution-api:8080
+      - EVOLUTION_API_KEY=${EVOLUTION_API_KEY}
+      - NEXT_PUBLIC_EVO_URL=
+    volumes:
+      - zapfire_data:/app/data
+    expose:
+      - "3000"
+    networks:
+      - zapfire_net
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: zapfire_caddy
+    restart: unless-stopped
+    depends_on:
+      - zapfire
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN}
+      - ACME_EMAIL=${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - zapfire_net
+
+networks:
+  zapfire_net:
+
+volumes:
+  evolution_instances:
+  evolution_postgres:
+  evolution_redis:
+  zapfire_data:
+  caddy_data:
+  caddy_config:

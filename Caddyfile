@@ -1,0 +1,46 @@
+# Caddyfile do ZapFire — reverse proxy com HTTPS automático.
+#
+# Configuração mínima: Caddy detecta o `${DOMAIN}` do .env, pede certificado
+# Let's Encrypt e proxy passa pra app na rede interna do compose.
+# Ele renova certificados sozinho (a cada 60d).
+
+{
+	email {$ACME_EMAIL}
+	# Comente a linha abaixo pra ir pra produção da Let's Encrypt
+	# (deixe em staging só pra testar e não bater no rate limit).
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Limites razoáveis: o painel sobe imagem em base64 (logo etc).
+	request_body {
+		max_size 50MB
+	}
+
+	# Timeouts amplos pro disparo de mídia gigante não derrubar conexão.
+	reverse_proxy zapfire:3000 {
+		transport http {
+			read_timeout 120s
+			write_timeout 120s
+		}
+	}
+
+	# Cabeçalhos de segurança básicos
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Esconde a versão do servidor
+		-Server
+	}
+
+	# Logs em formato JSON pra grep / shipping
+	log {
+		output stdout
+		format json
+		level INFO
+	}
+}

@@ -1,0 +1,49 @@
+# Pra build mais rápido / imagens menores: tudo que não é essencial pro build
+# entra aqui. Replica o spirit do .gitignore + remove artefatos locais.
+
+# Node
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Next.js
+.next
+out
+.swc
+
+# Editor / OS
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+*.swp
+
+# Git
+.git
+.gitignore
+
+# Local env (a config de prod vem via docker-compose)
+.env
+.env.local
+.env*.local
+
+# DB local de dev — em prod, o volume monta /app/data
+prisma/dev.db
+prisma/dev.db-journal
+
+# Docs / deploy artifacts (não precisam ir pro container)
+DEPLOY.md
+README.md
+docker-compose.yml
+docker-compose.*.yml
+Caddyfile
+cloudflared/
+
+# Logs e temp
+*.log
+.cache
+.turbo
+coverage
+.tsbuildinfo

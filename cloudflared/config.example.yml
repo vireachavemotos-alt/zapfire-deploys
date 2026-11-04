@@ -1,0 +1,40 @@
+# Cloudflare Tunnel — alternativa ao Caddy.
+#
+# Vantagens:
+#  - HTTPS gerenciado pela Cloudflare (cert + renovação automáticos)
+#  - Não precisa abrir portas 80/443 no firewall do servidor
+#  - Cloudflare Access pode adicionar login (e-mail OTP / Google) sem código
+#  - Funciona até atrás de NAT (servidor sem IP público)
+#
+# Setup:
+#  1) Instale cloudflared no servidor (https://pkg.cloudflare.com/)
+#  2) cloudflared tunnel login
+#  3) cloudflared tunnel create zapfire
+#       → gera UUID e o arquivo de credentials JSON em ~/.cloudflared/<uuid>.json
+#  4) cloudflared tunnel route dns zapfire zapfire.seudominio.com
+#  5) Copie este arquivo pra ~/.cloudflared/config.yml e edite os marcadores
+#  6) cloudflared service install   → roda como serviço do sistema
+#
+# Quando usar Cloudflare Tunnel: comente o serviço `caddy` do
+# docker-compose.prod.yml e remova `ports: 80/443`. O ZapFire continua
+# expondo só `expose: 3000` na rede interna.
+
+# === EDITAR ===
+tunnel: SUBSTITUA-PELO-UUID-DO-TUNNEL
+credentials-file: /etc/cloudflared/SUBSTITUA-PELO-UUID-DO-TUNNEL.json
+# ==============
+
+# Se rodar o cloudflared NO HOST (e o ZapFire em Docker expondo na rede do host),
+# usar `localhost:3000`. Se rodar dentro do compose, usar `zapfire:3000`.
+ingress:
+  - hostname: zapfire.seudominio.com
+    service: http://localhost:3000
+    originRequest:
+      connectTimeout: 30s
+      noTLSVerify: false
+
+  # Catch-all obrigatório (HTTP 404 pra qualquer hostname não declarado)
+  - service: http_status:404
+
+# Métricas locais — opcional, útil pra debug
+metrics: 0.0.0.0:9090

@@ -1,0 +1,233 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #000000;
+  --foreground: #ededed;
+  --neon: 255 0 51;
+  --neon-soft: 255 23 68;
+  --neon-dim: 213 0 0;
+
+  /* superfícies em camadas (lift visual progressivo) */
+  --surface-0: #050507;
+  --surface-1: #0a0a0d;
+  --surface-2: #0e0e12;
+  --surface-3: #141418;
+  --hairline: rgba(255, 255, 255, 0.06);
+  --hairline-strong: rgba(255, 255, 255, 0.1);
+}
+
+html,
+body {
+  color: var(--foreground);
+  background: var(--surface-0);
+  min-height: 100%;
+  font-feature-settings: "ss01", "cv01", "cv11", "calt", "case";
+  letter-spacing: -0.011em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* iOS/mobile: evita "bounce" ao segurar e arrastar a tela e trava
+   * overscroll chain, assim o usuário não vê a página inteira dançando. */
+  overscroll-behavior: none;
+  touch-action: pan-y;
+  /* respeita o notch do iPhone */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+body {
+  background:
+    radial-gradient(1200px 500px at 20% -10%, rgba(255, 0, 51, 0.08), transparent 60%),
+    radial-gradient(900px 400px at 110% 10%, rgba(255, 23, 68, 0.04), transparent 60%),
+    var(--surface-0);
+  background-attachment: fixed;
+}
+
+/* números + código monoespaçados (usar classe .font-mono ou tabular-nums) */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  transition: background 0.2s;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+::selection {
+  background: rgba(255, 0, 51, 0.28);
+  color: #fff;
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+  .text-neon {
+    color: #ff0033;
+  }
+  .text-neon-soft {
+    color: #ff3355;
+  }
+  /* Título com gradiente sutil (branco → off-white) — look premium */
+  .text-premium {
+    background: linear-gradient(180deg, #ffffff 0%, #c7c7d1 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  /* Gradient red pro logotipo / acentos */
+  .text-gradient-neon {
+    background: linear-gradient(135deg, #ff0033 0%, #ff3355 50%, #ff1744 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .border-neon {
+    border: 1px solid rgba(255, 0, 51, 0.4);
+  }
+
+  /* Superfícies "glass" em camadas — dão profundidade sem serem berrantes */
+  .glass {
+    background: var(--surface-1);
+    border: 1px solid var(--hairline);
+    transition: border-color 180ms ease, background 180ms ease,
+      transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .glass:hover {
+    border-color: var(--hairline-strong);
+  }
+  .glass-strong {
+    background: linear-gradient(180deg, var(--surface-2), var(--surface-1));
+    border: 1px solid var(--hairline-strong);
+  }
+  .glass-elevated {
+    background: var(--surface-2);
+    border: 1px solid var(--hairline-strong);
+    box-shadow:
+      0 1px 0 0 rgba(255, 255, 255, 0.03) inset,
+      0 20px 40px -20px rgba(0, 0, 0, 0.6);
+  }
+
+  .bg-grid {
+    background-image:
+      linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+    background-size: 36px 36px;
+  }
+
+  .neon-divider {
+    height: 1px;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(255, 255, 255, 0.08) 50%,
+      transparent 100%
+    );
+  }
+
+  /* Halo sutil em volta de elementos ativos — usar com moderação */
+  .halo-neon {
+    box-shadow:
+      0 0 0 1px rgba(255, 0, 51, 0.4),
+      0 8px 24px -8px rgba(255, 0, 51, 0.35);
+  }
+
+  /* Shine sweep pra botões / CTAs — horizontal, sutil, controlado */
+  .shine {
+    position: relative;
+    overflow: hidden;
+  }
+  .shine::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: -75%;
+    width: 50%;
+    height: 100%;
+    background: linear-gradient(
+      110deg,
+      transparent 0%,
+      rgba(255, 255, 255, 0.14) 50%,
+      transparent 100%
+    );
+    transform: skewX(-20deg);
+    transition: left 700ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    pointer-events: none;
+  }
+  .shine:hover::before {
+    left: 130%;
+  }
+
+  /* Entrada de conteúdo — sobe 8px + fade */
+  .animate-fade-up {
+    animation: fadeUp 360ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+  .animate-fade-in {
+    animation: fadeIn 280ms ease-out both;
+  }
+  .animate-pop {
+    animation: pop 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+}
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes pop {
+  0% {
+    transform: scale(0.94);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* Classes de variáveis do Next/font reaplicadas com fallback generoso */
+.font-sans {
+  font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+.font-mono {
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, "Liberation Mono", monospace;
+}
+
+/* Respeita quem pediu redução de animação */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0ms !important;
+  }
+}

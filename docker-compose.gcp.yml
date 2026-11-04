@@ -1,0 +1,137 @@
+# Stack simplificada pra Google Cloud e2-micro (1 GB RAM).
+# Diferenças do docker-compose.prod.yml:
+#  - Sem Postgres externo (Evolution usa SQLite interno)
+#  - Sem Redis (Evolution usa cache in-memory)
+#  - Caddy mais enxuto
+# RAM esperada: ~700 MB (cabe no 1 GB com folga de 300 MB)
+
+services:
+  evo-postgres:
+    image: postgres:16-alpine
+    container_name: evo_postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=evo
+      - POSTGRES_PASSWORD=evopass
+      - POSTGRES_DB=evolution
+    volumes:
+      - evo_postgres_data:/var/lib/postgresql/data
+    networks:
+      - zapfire_net
+    deploy:
+      resources:
+        limits:
+          memory: 120M
+
+  evolution-api:
+    image: evoapicloud/evolution-api:v2.3.7
+    container_name: evolution_api
+    restart: unless-stopped
+    depends_on:
+      - evo-postgres
+    environment:
+      - SERVER_TYPE=http
+      - SERVER_PORT=8080
+      - CORS_ORIGIN=*
+      - CORS_METHODS=GET,POST,PUT,DELETE
+      - CORS_CREDENTIALS=true
+      - LOG_LEVEL=ERROR,WARN
+      - LOG_COLOR=false
+      - LOG_BAILEYS=error
+      - DEL_INSTANCE=false
+      - CONFIG_SESSION_PHONE_CLIENT=ZapFire
+      - CONFIG_SESSION_PHONE_NAME=Chrome
+      - QRCODE_LIMIT=30
+      - QRCODE_COLOR=#000000
+      - AUTHENTICATION_TYPE=apikey
+      - AUTHENTICATION_API_KEY=${EVOLUTION_API_KEY}
+      - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
+      # DATABASE_PROVIDER é obrigatório mesmo com DATABASE_ENABLED=false
+      # (Evolution v2.3.7 valida o schema no boot antes de checar o enabled)
+      # DATABASE_ENABLED=true é obrigatório na v2.3.7 — o ChannelStartupService
+      # (Baileys) precisa persistir auth state da instância; com false, cria
+      # instance quebra com "Cannot read properties of undefined (reading 'state')".
+      # Deixamos SAVE_DATA_* tudo false pra NÃO gravar mensagens/historico/
+      # contacts/chats — Evolution só persiste auth (poucos KB por instância).
+      - DATABASE_PROVIDER=postgresql
+      - DATABASE_CONNECTION_URI=postgresql://evo:evopass@evo-postgres:5432/evolution
+      - DATABASE_ENABLED=true
+      - DATABASE_SAVE_DATA_INSTANCE=true
+      - DATABASE_SAVE_DATA_NEW_MESSAGE=false
+      - DATABASE_SAVE_MESSAGE_UPDATE=false
+      - DATABASE_SAVE_DATA_CONTACTS=false
+      - DATABASE_SAVE_DATA_CHATS=false
+      - DATABASE_SAVE_DATA_LABELS=false
+      - DATABASE_SAVE_DATA_HISTORIC=false
+      # Cache em memória simples (sem Redis)
+      - CACHE_REDIS_ENABLED=false
+      - CACHE_LOCAL_ENABLED=true
+    volumes:
+      - evolution_instances:/evolution/instances
+    expose:
+      - "8080"
+    networks:
+      - zapfire_net
+    deploy:
+      resources:
+        limits:
+          memory: 400M
+
+  zapfire:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: zapfire:latest
+    container_name: zapfire_app
+    restart: unless-stopped
+    depends_on:
+      - evolution-api
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=file:/app/data/prod.db
+      - EVOLUTION_API_URL=http://evolution-api:8080
+      - EVOLUTION_API_KEY=${EVOLUTION_API_KEY}
+      - NEXT_PUBLIC_EVO_URL=
+    volumes:
+      - zapfire_data:/app/data
+    expose:
+      - "3000"
+    networks:
+      - zapfire_net
+    deploy:
+      resources:
+        limits:
+          memory: 350M
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: zapfire_caddy
+    restart: unless-stopped
+    depends_on:
+      - zapfire
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN}
+      - ACME_EMAIL=${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - zapfire_net
+    deploy:
+      resources:
+        limits:
+          memory: 50M
+
+networks:
+  zapfire_net:
+
+volumes:
+  evolution_instances:
+  evo_postgres_data:
+  zapfire_data:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,12 @@
+-- CreateTable
+CREATE TABLE "NumeroMetrics" (
+    "instanceName" TEXT NOT NULL PRIMARY KEY,
+    "primeiroUsoEm" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "ultimoUsoEm" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "totalEnviadas" INTEGER NOT NULL DEFAULT 0,
+    "totalFalhas" INTEGER NOT NULL DEFAULT 0,
+    "diaRef" TEXT NOT NULL DEFAULT '',
+    "enviadasHoje" INTEGER NOT NULL DEFAULT 0,
+    "falhasHoje" INTEGER NOT NULL DEFAULT 0,
+    "atualizadoEm" DATETIME NOT NULL
+);

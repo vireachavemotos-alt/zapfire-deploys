@@ -1,0 +1,533 @@
+// ZapFire — schema do banco local (SQLite).
+// Self-hosted, zero dependências externas. O arquivo .db fica em prisma/dev.db.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Contato {
+  id             String   @id @default(cuid())
+  nome           String?
+  telefone       String   @unique
+  empresa        String?
+  /// Categoria/Negócio — agrupador de alto nível pra separar bases de
+  /// nichos diferentes ("Negócio A", "Cliente X", "Nicho Imóveis"). Diferente
+  /// de `empresa` (que é a empresa específica daquele contato individual).
+  /// Usada como filtro principal na página /contatos.
+  categoria      String?
+  tags           String? // JSON array serializado
+  whatsappValido Boolean? // null = não verificado
+  criadoEm       DateTime @default(now())
+  atualizadoEm   DateTime @updatedAt
+
+  listas ContatoLista[]
+
+  @@index([criadoEm])
+  @@index([categoria])
+}
+
+model Lista {
+  id           String   @id @default(cuid())
+  nome         String
+  descricao    String?
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  contatos  ContatoLista[]
+  campanhas Campanha[]
+
+  @@index([criadoEm])
+}
+
+model ContatoLista {
+  contatoId String
+  listaId   String
+  contato   Contato @relation(fields: [contatoId], references: [id], onDelete: Cascade)
+  lista     Lista   @relation(fields: [listaId], references: [id], onDelete: Cascade)
+
+  @@id([contatoId, listaId])
+  @@index([listaId])
+  @@index([contatoId])
+}
+
+model Campanha {
+  id            String  @id @default(cuid())
+  nome          String
+  status        String  @default("rascunho") // rascunho|agendada|em_execucao|pausada|concluida|erro
+  instanceNames String // JSON array
+  listaId       String?
+  lista         Lista?  @relation(fields: [listaId], references: [id], onDelete: SetNull)
+  listaSnapshot String? // JSON com {nome, contatoIds, contatos} no momento do disparo
+
+  messages String // JSON MessageBlock[]
+
+  delayMin         Int @default(8000)
+  delayMax         Int @default(20000)
+  delayEntreBlocos Int @default(2000)
+  limitePorHora    Int @default(60)
+
+  total      Int     @default(0)
+  enviadas   Int     @default(0)
+  falhas     Int     @default(0)
+  resultados String? // JSON Array<{numero,status,detail,timestamp?}>
+
+  agendadoPara DateTime?
+  criadoEm     DateTime  @default(now())
+  atualizadoEm DateTime  @updatedAt
+  iniciadaEm   DateTime?
+  concluidaEm  DateTime?
+
+  /// Modo de disparo:
+  ///  - "imediato": dispara tudo de uma vez (comportamento padrão)
+  ///  - "drip"   : disparos programados, N por dia, em janela horária
+  modo                    String @default("imediato")
+  /// Drip: quantos envios (ok+erro) por dia antes de auto-pausar.
+  dripLotePorDia          Int    @default(0)
+  /// Drip: dias da semana ativos, CSV ISO-8601 (1=seg..7=dom). Ex "1,2,3,4,5" = seg-sex.
+  /// String vazia = qualquer dia.
+  dripDiasSemana          String @default("")
+  /// Drip: janela horária local "HH:MM". Fora dela, auto-pausa.
+  dripHoraInicio          String @default("09:00")
+  dripHoraFim             String @default("18:00")
+  /// Drip: última data (YYYY-MM-DD local) em que a campanha entrou em_execucao
+  /// via scheduler automático. Evita re-triggar no mesmo dia.
+  dripUltimaDataExecutada String @default("")
+
+  /// Rating da campanha (1-5 estrelas), preenchido pelo usuário ao concluir.
+  rating        Int?
+  /// Comentário opcional do usuário sobre a campanha.
+  ratingComment String?
+
+  /// Versão atual publicada da sequência (incrementa a cada edição aplicada).
+  /// Novos MessageExecution pegam esta versão.
+  versaoAtual Int @default(1)
+
+  /// Qual runner processa esta campanha:
+  ///  - "legacy"       — runner atual, lê `messages` JSON direto (default)
+  ///  - "orchestrator" — runner novo, lê CampanhaStep + MessageExecution
+  /// String (em vez de boolean) pra permitir engines futuros sem migration.
+  engine String @default("legacy")
+
+  steps     CampanhaStep[]
+  versoes   CampanhaVersao[]
+  contatos  CampanhaContato[]
+  execucoes MessageExecution[]
+  audits    CampanhaAudit[]
+
+  @@index([status])
+  @@index([criadoEm])
+}
+
+/// Step editável (draft) da sequência de uma campanha. Representa UMA
+/// mensagem ou follow-up. O usuário edita isto na UI; ao "publicar", um
+/// snapshot vai pra CampanhaStepSnapshot vinculado a uma CampanhaVersao.
+model CampanhaStep {
+  id         String   @id @default(cuid())
+  campanhaId String
+  campanha   Campanha @relation(fields: [campanhaId], references: [id], onDelete: Cascade)
+
+  /// Posição na sequência (0-indexed). Reordenação troca este valor.
+  posicao Int
+  /// Rótulo humano: "Mensagem 1", "Follow-up 3", "Resposta positiva".
+  nome    String @default("")
+  /// Tipo lógico: "message" (envio normal), "followup" (depende de resposta),
+  /// "wait" (apenas aguarda), "branch_reply" / "branch_no_reply" (nós condicionais).
+  tipo    String @default("message")
+
+  /// Bloco MessageBlock serializado (mesma shape de hoje). Pode conter
+  /// múltiplos sub-blocos quando um "step" dispara vários (ex: texto + imagem).
+  blocks String // JSON MessageBlock[]
+
+  /// Schedule mode: "immediate" | "delay" | "absolute" | "after_reply" | "after_no_reply"
+  scheduleMode    String  @default("delay")
+  /// Para "delay"/"after_*": segundos a esperar após o step anterior
+  /// (ou após a resposta/não-resposta). Para "immediate" ignorado.
+  delaySegundos   Int     @default(0)
+  /// Para "absolute": "HH:MM" local. Ignorado nos demais.
+  horarioAbsoluto String?
+  /// Para branches: id do step pai cuja resposta define se este executa.
+  dependeDoStepId String?
+
+  /// Condições pra executar (JSON livre, pra expansão futura):
+  /// { "replied": true/false, "status_in": ["delivered"], ... }
+  condicao String?
+
+  ativo        Boolean  @default(true)
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  @@unique([campanhaId, posicao])
+  @@index([campanhaId])
+}
+
+/// Snapshot imutável da campanha publicado numa versão. Toda vez que o
+/// usuário salva uma edição relevante, um novo CampanhaVersao nasce e os
+/// steps draft são copiados pra CampanhaStepSnapshot. MessageExecution
+/// aponta pra esta versão — garante que jobs em andamento continuem com
+/// a config que começaram.
+model CampanhaVersao {
+  id           String   @id @default(cuid())
+  campanhaId   String
+  campanha     Campanha @relation(fields: [campanhaId], references: [id], onDelete: Cascade)
+  numero       Int // 1, 2, 3... == Campanha.versaoAtual quando foi criado
+  publicadaEm  DateTime @default(now())
+  publicadaPor String? // usuário/sistema (fica livre pra multi-tenant futuro)
+  resumo       String? // descrição humana da mudança
+
+  snapshots CampanhaStepSnapshot[]
+  execucoes MessageExecution[]
+
+  @@unique([campanhaId, numero])
+  @@index([campanhaId])
+}
+
+/// Step congelado dentro de uma versão. Mesma shape de CampanhaStep, mas
+/// SOMENTE LEITURA após publicado — é a fonte de verdade pros runners.
+model CampanhaStepSnapshot {
+  id             String         @id @default(cuid())
+  versaoId       String
+  versao         CampanhaVersao @relation(fields: [versaoId], references: [id], onDelete: Cascade)
+  /// Id do CampanhaStep original (pra correlacionar entre versões).
+  stepOriginalId String
+
+  posicao         Int
+  nome            String
+  tipo            String
+  blocks          String
+  scheduleMode    String
+  delaySegundos   Int
+  horarioAbsoluto String?
+  dependeDoStepId String?
+  condicao        String?
+  ativo           Boolean
+
+  execucoes MessageExecution[]
+
+  @@index([versaoId])
+  @@index([stepOriginalId])
+}
+
+/// Estado do contato dentro de uma campanha orquestrada.
+/// Uma linha por (campanha, contato). Mantém cursor da sequência e flags
+/// de resposta/opt-out pra o scheduler saber o que fazer na próxima tick.
+model CampanhaContato {
+  id         String   @id @default(cuid())
+  campanhaId String
+  campanha   Campanha @relation(fields: [campanhaId], references: [id], onDelete: Cascade)
+  contatoId  String
+
+  /// Step atual onde o contato está parado (stepOriginalId, não snapshot —
+  /// snapshot é escolhido na hora pela versaoAtual).
+  stepAtualId  String?
+  /// Versão com que começou a jornada. Se null, pega a versaoAtual no
+  /// momento de agendar o próximo step.
+  versaoFixada Int?
+
+  /// Status geral do contato na campanha:
+  /// "pendente" | "em_andamento" | "respondeu" | "nao_respondeu" |
+  /// "concluido" | "opted_out" | "bloqueado" | "falhou"
+  status String @default("pendente")
+
+  /// Última resposta detectada (vem de InboundMessage).
+  respondeuEm      DateTime?
+  ultimaRespostaId String?
+
+  /// Próximo horário programado pra avançar (consultado pelo scheduler).
+  proximoEnvioEm DateTime?
+
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  overrides CampanhaContatoOverride[]
+  execucoes MessageExecution[]
+
+  @@unique([campanhaId, contatoId])
+  @@index([campanhaId, status])
+  @@index([proximoEnvioEm])
+}
+
+/// Override por contato de um step específico. Permite customizar
+/// delay/horário/ativação SÓ pra UM contato sem clonar a campanha.
+model CampanhaContatoOverride {
+  id                String          @id @default(cuid())
+  campanhaContatoId String
+  campanhaContato   CampanhaContato @relation(fields: [campanhaContatoId], references: [id], onDelete: Cascade)
+  stepOriginalId    String
+
+  /// Qualquer campo abaixo != null sobrescreve o do step snapshot.
+  scheduleMode     String?
+  delaySegundos    Int?
+  horarioAbsoluto  String?
+  ativo            Boolean?
+  blocksSubstituto String? // JSON MessageBlock[] custom
+
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  @@unique([campanhaContatoId, stepOriginalId])
+}
+
+/// IDEMPOTÊNCIA DE ENVIO.
+/// Uma linha representa "este contato nesta campanha deve/tentou executar
+/// este step nesta versão". UNIQUE garante que mesmo em concorrência não
+/// vai duplicar. Antes de enviar, o worker INSERT nesta tabela com status
+/// "pending" (ou "running"); se der conflito, outro worker já pegou.
+model MessageExecution {
+  id                String               @id @default(cuid())
+  campanhaId        String
+  campanha          Campanha             @relation(fields: [campanhaId], references: [id], onDelete: Cascade)
+  campanhaContatoId String
+  campanhaContato   CampanhaContato      @relation(fields: [campanhaContatoId], references: [id], onDelete: Cascade)
+  stepOriginalId    String
+  versaoNumero      Int
+  versaoId          String
+  versao            CampanhaVersao       @relation(fields: [versaoId], references: [id])
+  snapshotId        String
+  snapshot          CampanhaStepSnapshot @relation(fields: [snapshotId], references: [id])
+
+  /// Status: "pending" | "scheduled" | "running" | "sent" | "delivered"
+  ///       | "read" | "replied" | "failed" | "blocked" | "opted_out" | "canceled"
+  status String @default("pending")
+
+  /// Agendado pra rodar quando. Pode ser futuro (follow-up).
+  agendadoPara DateTime
+  /// Primeira tentativa real (fim do delay/schedule).
+  iniciadoEm   DateTime?
+  /// Momento em que entrou em status terminal.
+  concluidoEm  DateTime?
+
+  /// Último erro conhecido (pra UI de debug).
+  erroDetalhe String?
+
+  attempts MessageAttempt[]
+
+  @@unique([campanhaId, campanhaContatoId, stepOriginalId, versaoNumero])
+  @@index([status, agendadoPara])
+  @@index([campanhaId])
+  @@index([campanhaContatoId])
+}
+
+/// Tentativa real de envio ao Evolution (uma execution pode ter N attempts
+/// se der retry). Guarda id da msg no WhatsApp pra correlacionar com inbound.
+model MessageAttempt {
+  id          String           @id @default(cuid())
+  executionId String
+  execution   MessageExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+
+  /// Qual instância Evolution foi usada.
+  instanceName   String
+  /// id retornado pelo Evolution (msg.id) — chave pra webhook de status.
+  evolutionMsgId String?
+  /// Variação do bloco escolhida (pra auditoria).
+  variacaoIndex  Int?
+  /// Texto final enviado (depois de spintax/vars resolvidos).
+  textoFinal     String?
+
+  status      String // "sent" | "failed" | "retrying"
+  erroDetalhe String?
+  enviadoEm   DateTime @default(now())
+
+  @@index([executionId])
+  @@index([evolutionMsgId])
+}
+
+/// Mensagem recebida de um contato (vem via webhook da Evolution).
+/// Dispara avaliação de follow-up "respondeu/não-respondeu".
+model InboundMessage {
+  id             String  @id @default(cuid())
+  instanceName   String
+  telefone       String // normalizado E.164 sem +
+  /// id da msg no WhatsApp (dedup de webhook duplicado).
+  evolutionMsgId String? @unique
+  /// Texto da msg recebida (ou tipo/mídia).
+  texto          String?
+  tipo           String  @default("text")
+
+  /// Correlação com nossa campanha (encontrada por telefone + janela
+  /// temporal; preenchida pelo processor, pode ser null se não achar).
+  campanhaContatoId String?
+
+  recebidoEm   DateTime  @default(now())
+  processadoEm DateTime?
+
+  @@index([telefone, recebidoEm])
+  @@index([campanhaContatoId])
+}
+
+/// Log de edição em campanha. Toda mudança relevante na UI (editar step,
+/// publicar versão, adicionar step, alterar schedule) deixa trilha.
+model CampanhaAudit {
+  id         String   @id @default(cuid())
+  campanhaId String
+  campanha   Campanha @relation(fields: [campanhaId], references: [id], onDelete: Cascade)
+
+  /// Usuário/sistema que fez (livre; futuro multi-tenant).
+  autor   String @default("sistema")
+  /// Tipo da ação: "step_criado" | "step_editado" | "step_removido" |
+  /// "step_reordenado" | "versao_publicada" | "contato_override" |
+  /// "campanha_pausada" | "campanha_retomada" | ...
+  acao    String
+  /// JSON { campo, antes, depois, stepId?, versao?, ... }
+  payload String
+
+  criadoEm DateTime @default(now())
+
+  @@index([campanhaId, criadoEm])
+}
+
+/// Template de mensagem — conjunto salvo de MessageBlock[] pra reuso.
+/// Um template é um snapshot dos blocos (texto + mídia + variações) que
+/// o usuário pode aplicar em qualquer campanha nova com 1 clique.
+model Template {
+  id           String   @id @default(cuid())
+  nome         String
+  descricao    String?
+  /// JSON MessageBlock[] — mesma shape usada em Campanha.messages.
+  blocks       String
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+
+  @@index([criadoEm])
+}
+
+/// Bloqueio temporário de número. Quando um número falha N vezes seguidas
+/// em campanhas (ex: número fora do WhatsApp, banned, sem entrega), entra
+/// aqui automaticamente por uma janela X (default 7d). O runner respeita:
+/// pula como "pulado" sem gastar delay nem cota.
+///
+/// Chave é o telefone normalizado (E.164 sem +) — funciona para números
+/// que nem viraram contato no banco ainda.
+model ContatoBloqueado {
+  telefone    String    @id
+  motivo      String
+  /// Número de falhas que motivaram o bloqueio.
+  falhas      Int       @default(0)
+  /// Origem: "auto" (runner) ou "manual" (usuário marcou na UI).
+  origem      String    @default("auto")
+  bloqueadoEm DateTime  @default(now())
+  /// Até quando o bloqueio vale. NULL = permanente (até desbloqueio manual).
+  validoAte   DateTime?
+
+  @@index([validoAte])
+}
+
+/// Métricas por instância Evolution. A gente não gerencia conexão aqui —
+/// isso vive na Evolution. Só registramos uso pra calcular score de
+/// aquecimento, taxa de sucesso e capacidade diária sugerida.
+///
+/// Reset diário: quando um send é registrado num dia diferente de `diaRef`,
+/// o registrador zera `enviadasHoje/falhasHoje` e atualiza `diaRef`.
+model NumeroMetrics {
+  instanceName  String   @id
+  /// Primeiro envio registrado — base pro cálculo de idade/aquecimento.
+  primeiroUsoEm DateTime @default(now())
+  /// Último envio registrado (OK ou erro). Serve pra detectar inatividade.
+  ultimoUsoEm   DateTime @default(now())
+
+  /// Lifetime — todos os envios OK desde o primeiro uso.
+  totalEnviadas Int @default(0)
+  /// Lifetime — todos os envios com falha.
+  totalFalhas   Int @default(0)
+
+  /// Dia corrente no formato YYYY-MM-DD (fuso local). Quando um send
+  /// chega num dia diferente, resetamos os contadores de dia.
+  diaRef       String @default("")
+  enviadasHoje Int    @default(0)
+  falhasHoje   Int    @default(0)
+
+  atualizadoEm DateTime @updatedAt
+}
+
+// ─── Aquecimento (chip warming) ─────────────────────────────────────
+// Duas instâncias conversando entre si pra ganhar reputação. Mimetiza
+// conversa humana com frases naturais, delays aleatórios e progressão
+// diária (dia 1=5 msg, dia 7=40, dia 30=100).
+
+model WarmupSession {
+  id             String   @id @default(cuid())
+  instanciaA     String // instanceName (quem envia primeiro)
+  instanciaB     String // instanceName
+  ativo          Boolean  @default(true)
+  iniciadoEm     DateTime @default(now())
+  proximoEnvioEm DateTime @default(now())
+
+  totalEnviadas Int    @default(0)
+  enviadasHoje  Int    @default(0)
+  diaRef        String @default("") // "YYYY-MM-DD" pra zerar enviadasHoje
+
+  diasAtivo    Int @default(0)
+  limiteDiario Int @default(5)
+
+  ultimaDirecao String  @default("A") // "A" | "B"
+  ultimaFraseId String?
+
+  messages WarmupMessage[]
+
+  @@unique([instanciaA, instanciaB])
+}
+
+model WarmupMessage {
+  id          String        @id @default(cuid())
+  sessionId   String
+  session     WarmupSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  from        String // instanceName
+  to          String // instanceName
+  texto       String
+  enviadoEm   DateTime      @default(now())
+  status      String        @default("sent") // "sent" | "failed"
+  erroDetalhe String?
+
+  @@index([sessionId, enviadoEm])
+}
+
+model WarmupFrase {
+  id        String  @id @default(cuid())
+  texto     String  @unique
+  categoria String  @default("geral") // "saudacao" | "pergunta" | "resposta" | "geral"
+  ativa     Boolean @default(true)
+  usos      Int     @default(0)
+
+  @@index([categoria, ativa])
+}
+
+/// Grupo WhatsApp conhecido pela plataforma. Uma instance "possui" o grupo
+/// (ou participa dele) — quando múltiplas instances estão no mesmo jid,
+/// criamos uma linha por instance pra isolar permissões/dados.
+model Grupo {
+  id           String        @id @default(cuid())
+  /// JID do grupo (ex: "120363XXXXXX@g.us"). Único no sistema inteiro;
+  /// se o mesmo grupo for conhecido por duas instances, salvamos uma linha
+  /// por par (jid, instanceName) via upsert composto no app layer.
+  jid          String        @unique
+  nome         String
+  descricao    String?
+  pictureUrl   String?
+  /// Instance Evolution que está no grupo (foi quem viu/entrou).
+  instanceName String
+  totalMembros Int           @default(0)
+  descobertoEm DateTime      @default(now())
+  ultimaSincEm DateTime?
+  membros      GrupoMembro[]
+
+  @@index([instanceName])
+}
+
+model GrupoMembro {
+  id       String   @id @default(cuid())
+  grupoId  String
+  grupo    Grupo    @relation(fields: [grupoId], references: [id], onDelete: Cascade)
+  /// Telefone normalizado (lib/phone.normalizePhone) — formato E.164 sem +.
+  telefone String
+  pushName String?
+  /// "admin" | "superadmin" | null
+  admin    String?
+  entrouEm DateTime @default(now())
+
+  @@unique([grupoId, telefone])
+  @@index([telefone])
+}
